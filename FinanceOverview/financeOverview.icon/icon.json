@@ -1,0 +1,72 @@
+{
+  "fill" : {
+    "automatic-gradient" : "display-p3:0.00000,0.54898,1.00000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "placeholdertext.fill 2.png",
+          "name" : "placeholdertext.fill 2",
+          "position" : {
+            "scale" : 0.16,
+            "translation-in-points" : [
+              -144.62823847516438,
+              -232.8475520095435
+            ]
+          }
+        },
+        {
+          "glass" : true,
+          "image-name" : "eurosign.circle.fill.png",
+          "name" : "eurosign.circle.fill",
+          "position" : {
+            "scale" : 0.2,
+            "translation-in-points" : [
+              253,
+              338
+            ]
+          }
+        },
+        {
+          "glass" : true,
+          "image-name" : "document.png",
+          "name" : "document",
+          "position" : {
+            "scale" : 0.62,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "fill" : "automatic",
+          "image-name" : "chart.bar.fill.png",
+          "name" : "chart.bar.fill",
+          "position" : {
+            "scale" : 0.23,
+            "translation-in-points" : [
+              0,
+              136.15999999999997
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
