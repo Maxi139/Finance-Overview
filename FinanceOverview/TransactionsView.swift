@@ -33,9 +33,9 @@ struct TransactionsView: View {
                     } label: {
                         Image(systemName: filters.isActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                     }
-                    // CSV-Export als ShareLink (URL zur temporären CSV-Datei)
-                    ShareLink(item: store.exportCSV(),
-                              preview: SharePreview("Buchungen.csv")) {
+                    // Export: use store.exportAll() which returns a URL
+                    ShareLink(item: store.exportAll(),
+                              preview: SharePreview("FinanceOverview-Backup.json")) {
                         Image(systemName: "square.and.arrow.up")
                     }
                     
@@ -52,7 +52,7 @@ struct TransactionsView: View {
             .searchable(text: $searchText, isPresented: $isSearchPresented, placement: .navigationBarDrawer(displayMode: .always), prompt: "Buchungen durchsuchen")
             .sheet(isPresented: $showAddFlow) {
                 AddTransactionFlowView()
-                    .environmentObject(store) // gleicher Store -> sofortige Aktualisierung
+                    .environmentObject(store)
             }
             .sheet(isPresented: $showImportSheet) {
                 ImportCSVView(isPresented: $showImportSheet)
@@ -71,11 +71,9 @@ struct TransactionsView: View {
     private var filteredTransactions: [FinanceTransaction] {
         var txs = store.transactions
         
-        // Art
         if !filters.kinds.isEmpty {
             txs = txs.filter { filters.kinds.contains($0.kind) }
         }
-        // Konto(s)
         if !filters.accountIDs.isEmpty {
             txs = txs.filter { t in
                 switch t.kind {
@@ -88,33 +86,27 @@ struct TransactionsView: View {
                 }
             }
         }
-        // Zeitraum
         if let from = filters.dateFrom {
             txs = txs.filter { $0.date >= Calendar.current.startOfDay(for: from) }
         }
         if let to = filters.dateTo {
-            // bis einschließlich Endtag
             let end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: to))!
             txs = txs.filter { $0.date < end }
         }
-        // Betrag (absolut)
         if let minA = filters.minAmount {
             txs = txs.filter { abs($0.amount) >= minA }
         }
         if let maxA = filters.maxAmount {
             txs = txs.filter { abs($0.amount) <= maxA }
         }
-        // Notiz
         if filters.onlyWithNotes {
             txs = txs.filter { !($0.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         }
-        // Suche
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !q.isEmpty {
             txs = txs.filter { t in
                 let hay = "\(t.name) \(t.note ?? "")".localizedCaseInsensitiveContains(q)
                 if hay { return true }
-                // optional: Konto-Namen durchsuchen
                 switch t.kind {
                 case .income, .expense:
                     if let id = t.accountID,
@@ -125,6 +117,9 @@ struct TransactionsView: View {
                     let to = store.accounts.first(where: { $0.id == t.toAccountID })?.name ?? ""
                     if from.localizedCaseInsensitiveContains(q) || to.localizedCaseInsensitiveContains(q) { return true }
                 }
+                // Kategorie-Name durchsuchen
+                if let cat = store.category(by: t.categoryID),
+                   cat.name.localizedCaseInsensitiveContains(q) { return true }
                 return false
             }
         }
@@ -182,9 +177,22 @@ struct TransactionRow: View {
             }
             return "-"
         case .transfer:
-            let from = store.accounts.first(where: {$0.id == transaction.fromAccountID})?.name ?? "—"
-            let to   = store.accounts.first(where: {$0.id == transaction.toAccountID})?.name ?? "—"
+            let from = store.accounts.first(where: {$0.id == transaction.fromAccountID })?.name ?? "—"
+            let to   = store.accounts.first(where: {$0.id == transaction.toAccountID })?.name ?? "—"
             return "\(from) → \(to)"
+        }
+    }
+    var categoryTag: some View {
+        Group {
+            if let cat = store.category(by: transaction.categoryID) {
+                HStack(spacing: 6) {
+                    Circle().fill(cat.swiftUIColor).frame(width: 8, height: 8)
+                    Text(cat.name).font(.caption2)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(cat.swiftUIColor.opacity(0.15), in: Capsule())
+            }
         }
     }
     
@@ -192,7 +200,10 @@ struct TransactionRow: View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text(transaction.name).font(.body.weight(.medium))
-                Text(accountNameText).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text(accountNameText).font(.caption).foregroundStyle(.secondary)
+                    categoryTag
+                }
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 4) {
@@ -237,6 +248,17 @@ struct TransactionDetailView: View {
                 HStack { Text("Betrag"); Spacer(); Text(formatCurrency(transaction.amount)).foregroundStyle(.secondary) }
                 HStack { Text("Datum"); Spacer(); Text(dateFormatterShort.string(from: transaction.date)).foregroundStyle(.secondary) }
                 HStack { Text(transaction.kind == .transfer ? "Von/Nach" : "Konto"); Spacer(); Text(accountText).foregroundStyle(.secondary) }
+                if let cat = store.category(by: transaction.categoryID) {
+                    HStack {
+                        Text("Kategorie")
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Circle().fill(cat.swiftUIColor).frame(width: 10, height: 10)
+                            Text(cat.name)
+                        }
+                        .foregroundStyle(cat.swiftUIColor)
+                    }
+                }
             }
             if let note = transaction.note, !note.isEmpty {
                 Section("Notiz") {
@@ -276,65 +298,56 @@ private struct ImportCSVView: View {
     @Binding var isPresented: Bool
     
     @State private var selectedAccount: Account?
-    @State private var showFileImporter = false
-    @State private var lastImportInfo: String?
+    @State private var pickedURL: URL?
+    @State private var importSummary: String?
+    @State private var showDocumentPicker = false
     
     var body: some View {
         NavigationStack {
             Form {
-                Section("Zielkonto") {
+                Section("Konto") {
                     accountPicker(selection: $selectedAccount)
                 }
-                
                 Section("CSV-Datei") {
+                    if let url = pickedURL {
+                        Text(url.lastPathComponent).font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        Text("Keine Datei gewählt").foregroundStyle(.secondary)
+                    }
                     Button {
-                        showFileImporter = true
+                        showDocumentPicker = true
                     } label: {
-                        Label("CSV auswählen", systemImage: "doc.badge.plus")
-                    }
-                    .disabled(selectedAccount == nil)
-                    
-                    if let info = lastImportInfo {
-                        Text(info)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        Label("Datei wählen", systemImage: "doc")
                     }
                 }
-                
-                Section {
-                    Text("Format pro Zeile: Name,Datum,Betrag")
-                    Text("Komma-getrennt (CSV), Felder können in Anführungszeichen stehen.")
-                    Text("Datum: dd.MM.yy (z. B. 15.09.25)")
-                    Text("Betrag: negativ für Ausgaben, positiv für Einnahmen")
+                if let summary = importSummary {
+                    Section("Ergebnis") {
+                        Text(summary)
+                    }
                 }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
             }
             .navigationTitle("CSV importieren")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Schließen") { isPresented = false }
                 }
-            }
-            .fileImporter(isPresented: $showFileImporter,
-                          allowedContentTypes: [
-                            .commaSeparatedText, .text, .plainText, .utf8PlainText, .data
-                          ],
-                          allowsMultipleSelection: false) { result in
-                switch result {
-                case .success(let urls):
-                    guard let url = urls.first, let account = selectedAccount else { return }
-                    let imported = store.importCSV(from: url, to: account)
-                    lastImportInfo = "\(imported) Buchungen importiert."
-                case .failure(let error):
-                    lastImportInfo = "Import fehlgeschlagen: \(error.localizedDescription)"
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Importieren") { runImport() }
+                        .disabled(selectedAccount == nil || pickedURL == nil)
                 }
             }
+            .sheet(isPresented: $showDocumentPicker) {
+                DocumentPicker(url: $pickedURL)
+            }
         }
-        .presentationDetents([.medium, .large])
     }
     
-    // Gruppierter Konto-Picker (wie im Add-Flow)
+    private func runImport() {
+        guard let acc = selectedAccount, let url = pickedURL else { return }
+        let count = store.importCSV(from: url, to: acc)
+        importSummary = count > 0 ? "\(count) Buchungen importiert." : "Keine Buchungen importiert."
+    }
+    
     private func accountPicker(selection: Binding<Account?>) -> some View {
         Picker("Konto", selection: selection) {
             ForEach(AccountCategory.allCases) { cat in
@@ -347,17 +360,7 @@ private struct ImportCSVView: View {
                 if !accountsInCat.isEmpty {
                     Section(cat.rawValue) {
                         ForEach(accountsInCat) { acc in
-                            HStack {
-                                if acc.isPrimary { Image(systemName: "star.fill").foregroundStyle(.yellow) }
-                                Text(acc.name)
-                                if acc.isSubaccount {
-                                    Text("Unterkonto")
-                                        .font(.caption2)
-                                        .padding(4)
-                                        .background(.secondary.opacity(0.15), in: Capsule())
-                                }
-                            }
-                            .tag(Optional(acc))
+                            Text(acc.name).tag(Optional(acc) as Account?)
                         }
                     }
                 }
@@ -367,7 +370,26 @@ private struct ImportCSVView: View {
     }
 }
 
-// MARK: - Filter
+private struct DocumentPicker: UIViewControllerRepresentable {
+    @Binding var url: URL?
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let parent: DocumentPicker
+        init(_ parent: DocumentPicker) { self.parent = parent }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            parent.url = urls.first
+        }
+    }
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.commaSeparatedText, UTType.text, UTType.data], asCopy: true)
+        picker.allowsMultipleSelection = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+}
+
+// MARK: - Filter Optionen
 
 private struct TransactionFilterOptions {
     var kinds: Set<TransactionKind> = []
@@ -392,122 +414,114 @@ private struct TransactionFilterOptions {
     }
 }
 
+// MARK: - Filter View
+
 private struct TransactionFilterView: View {
     @EnvironmentObject var store: FinanceStore
-    @Environment(\.dismiss) private var dismiss
-    
     @Binding var filters: TransactionFilterOptions
-    
-    // Strings für Betrag (optional)
-    @State private var minAmountText: String = ""
-    @State private var maxAmountText: String = ""
     
     var body: some View {
         Form {
             Section("Art") {
-                ForEach(TransactionKind.allCases) { kind in
-                    Toggle(kind.rawValue, isOn: Binding(
-                        get: { filters.kinds.contains(kind) },
-                        set: { new in
-                            if new { filters.kinds.insert(kind) } else { filters.kinds.remove(kind) }
+                ForEach(TransactionKind.allCases) { k in
+                    Toggle(k.rawValue, isOn: Binding(
+                        get: { filters.kinds.contains(k) },
+                        set: { newVal in
+                            if newVal { filters.kinds.insert(k) } else { filters.kinds.remove(k) }
                         }
                     ))
                 }
             }
             Section("Konten") {
-                if store.accounts.isEmpty {
-                    Text("Keine Konten vorhanden").foregroundStyle(.secondary)
-                } else {
-                    ForEach(store.accounts) { acc in
-                        HStack {
-                            Text(acc.name)
-                            Spacer()
-                            if filters.accountIDs.contains(acc.id) {
-                                Image(systemName: "checkmark").foregroundStyle(.tint)
-                            }
+                ForEach(AccountCategory.allCases) { cat in
+                    let accountsInCat = store.accounts
+                        .filter { $0.category == cat }
+                        .sorted { lhs, rhs in
+                            if lhs.isPrimary != rhs.isPrimary { return lhs.isPrimary && !rhs.isPrimary }
+                            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if filters.accountIDs.contains(acc.id) {
-                                filters.accountIDs.remove(acc.id)
-                            } else {
-                                filters.accountIDs.insert(acc.id)
+                    if !accountsInCat.isEmpty {
+                        Section(cat.rawValue) {
+                            ForEach(accountsInCat) { acc in
+                                Toggle(isOn: Binding(
+                                    get: { filters.accountIDs.contains(acc.id) },
+                                    set: { newVal in
+                                        if newVal { filters.accountIDs.insert(acc.id) } else { filters.accountIDs.remove(acc.id) }
+                                    }
+                                )) {
+                                    HStack {
+                                        if acc.isPrimary { Image(systemName: "star.fill").foregroundStyle(.yellow) }
+                                        Text(acc.name)
+                                        if acc.isSubaccount {
+                                            Text("Unterkonto")
+                                                .font(.caption2)
+                                                .padding(4)
+                                                .background(.secondary.opacity(0.15), in: Capsule())
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
             Section("Zeitraum") {
-                Toggle("Von", isOn: Binding(
+                DatePicker("Von", selection: Binding(
+                    get: { filters.dateFrom ?? Date() },
+                    set: { filters.dateFrom = $0 }
+                ), displayedComponents: .date)
+                .environment(\.locale, Locale(identifier: "de_DE"))
+                .opacity(filters.dateFrom == nil ? 0.6 : 1)
+                Toggle("Von aktiv", isOn: Binding(
                     get: { filters.dateFrom != nil },
-                    set: { new in filters.dateFrom = new ? Date() : nil }
+                    set: { isOn in filters.dateFrom = isOn ? Calendar.current.startOfDay(for: Date()) : nil }
                 ))
-                if let from = filters.dateFrom {
-                    DatePicker("Start", selection: Binding(get: { from }, set: { filters.dateFrom = $0 }), displayedComponents: .date)
-                }
-                Toggle("Bis", isOn: Binding(
+                
+                DatePicker("Bis", selection: Binding(
+                    get: { filters.dateTo ?? Date() },
+                    set: { filters.dateTo = $0 }
+                ), displayedComponents: .date)
+                .environment(\.locale, Locale(identifier: "de_DE"))
+                .opacity(filters.dateTo == nil ? 0.6 : 1)
+                Toggle("Bis aktiv", isOn: Binding(
                     get: { filters.dateTo != nil },
-                    set: { new in filters.dateTo = new ? Date() : nil }
+                    set: { isOn in filters.dateTo = isOn ? Calendar.current.startOfDay(for: Date()) : nil }
                 ))
-                if let to = filters.dateTo {
-                    DatePicker("Ende", selection: Binding(get: { to }, set: { filters.dateTo = $0 }), displayedComponents: .date)
+            }
+            Section("Betrag") {
+                HStack {
+                    Text("Min.")
+                    Spacer()
+                    TextField("0", value: Binding(
+                        get: { filters.minAmount ?? 0 },
+                        set: { filters.minAmount = $0 > 0 ? $0 : nil }
+                    ), format: .number)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 120)
+                }
+                HStack {
+                    Text("Max.")
+                    Spacer()
+                    TextField("0", value: Binding(
+                        get: { filters.maxAmount ?? 0 },
+                        set: { filters.maxAmount = $0 > 0 ? $0 : nil }
+                    ), format: .number)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 120)
                 }
             }
-            Section("Betrag (absolut)") {
-                HStack {
-                    Text("Minimum")
-                    Spacer()
-                    TextField("z. B. 10", text: $minAmountText)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(maxWidth: 120)
-                }
-                HStack {
-                    Text("Maximum")
-                    Spacer()
-                    TextField("z. B. 500", text: $maxAmountText)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(maxWidth: 120)
-                }
+            Section {
+                Toggle("Nur mit Notizen", isOn: $filters.onlyWithNotes)
             }
-            Section("Weitere") {
-                Toggle("Nur mit Notiz", isOn: $filters.onlyWithNotes)
+            Section {
+                Button("Zurücksetzen", role: .destructive) {
+                    filters.reset()
+                }
             }
         }
         .navigationTitle("Filter")
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Zurücksetzen") {
-                    filters.reset()
-                    minAmountText = ""
-                    maxAmountText = ""
-                }
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Fertig") {
-                    applyAmounts()
-                    dismiss()
-                }
-            }
-        }
-        .onAppear {
-            if let minA = filters.minAmount { minAmountText = NumberFormatter.localizedString(from: NSNumber(value: minA), number: .decimal) }
-            if let maxA = filters.maxAmount { maxAmountText = NumberFormatter.localizedString(from: NSNumber(value: maxA), number: .decimal) }
-        }
-    }
-    
-    private func applyAmounts() {
-        func parse(_ s: String) -> Double? {
-            var s = s.trimmingCharacters(in: .whitespacesAndNewlines)
-            s = s.replacingOccurrences(of: "€", with: "")
-                 .replacingOccurrences(of: " ", with: "")
-                 .replacingOccurrences(of: ".", with: "")
-                 .replacingOccurrences(of: ",", with: ".")
-            return Double(s)
-        }
-        filters.minAmount = parse(minAmountText)
-        filters.maxAmount = parse(maxAmountText)
     }
 }
 
@@ -528,6 +542,17 @@ struct EditTransactionView: View {
     @State private var fromAccount: Account?
     @State private var toAccount: Account?
     
+    @State private var selectedCategoryID: UUID?
+    @State private var showCreateCategory = false
+    
+    // Bestätigungsdialog für Bulk-Anwendung
+    @State private var showApplyToPastDialog: Bool = false
+    @State private var pendingApplyCategoryID: UUID?
+    @State private var pendingName: String = ""
+    @State private var pendingDate: Date = Date()
+    @State private var pendingUpdatedTx: FinanceTransaction?
+    @State private var pendingCount: Int = 0
+    
     init(transaction: FinanceTransaction) {
         self.transaction = transaction
         _name = State(initialValue: transaction.name)
@@ -537,6 +562,7 @@ struct EditTransactionView: View {
         _selectedAccount = State(initialValue: nil)
         _fromAccount = State(initialValue: nil)
         _toAccount = State(initialValue: nil)
+        _selectedCategoryID = State(initialValue: transaction.categoryID)
     }
     
     var body: some View {
@@ -580,6 +606,14 @@ struct EditTransactionView: View {
                         }
                         .pickerStyle(.navigationLink)
                     }
+                    Section("Kategorie") {
+                        CategoryPickerInline
+                        Button {
+                            showCreateCategory = true
+                        } label: {
+                            Label("Neue Kategorie erstellen", systemImage: "tag.badge.plus")
+                        }
+                    }
                 }
                 
                 Section("Betrag & Datum") {
@@ -610,7 +644,6 @@ struct EditTransactionView: View {
                 }
             }
             .onAppear {
-                // Auflösen der Konten erst hier (Store verfügbar)
                 switch transaction.kind {
                 case .income, .expense:
                     if let id = transaction.accountID {
@@ -625,6 +658,57 @@ struct EditTransactionView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showCreateCategory) {
+                NavigationStack {
+                    CreateOrEditCategoryView { new in
+                        selectedCategoryID = new.id
+                    }
+                    .environmentObject(store)
+                }
+                .presentationDetents([.medium, .large])
+            }
+        }
+        // ConfirmationDialog für Bulk-Anwendung
+        .confirmationDialog(
+            "Auch vergangene Buchungen kategorisieren?",
+            isPresented: $showApplyToPastDialog,
+            titleVisibility: .visible
+        ) {
+            Button("Ja, \(pendingCount) Buchungen aktualisieren", role: .none) {
+                if let catID = pendingApplyCategoryID {
+                    store.applyCategory(catID, toPastUncategorizedTransactionsMatching: pendingName, before: pendingDate)
+                }
+                if let updated = pendingUpdatedTx {
+                    store.updateTransaction(updated)
+                }
+                dismiss()
+            }
+            Button("Nur diese Buchung", role: .cancel) {
+                if let updated = pendingUpdatedTx {
+                    store.updateTransaction(updated)
+                }
+                dismiss()
+            }
+        } message: {
+            Text("Es gibt \(pendingCount) vergangene Buchungen ohne Kategorie mit dem gleichen Namen. Sollen diese ebenfalls die Kategorie erhalten?")
+        }
+    }
+    
+    private var CategoryPickerInline: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack {
+                CategoryPickerView(selectedID: $selectedCategoryID)
+                    .environmentObject(store)
+                if selectedCategoryID != nil {
+                    Button {
+                        selectedCategoryID = nil
+                    } label: {
+                        Label("Entfernen", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(.vertical, 4)
         }
     }
     
@@ -651,23 +735,45 @@ struct EditTransactionView: View {
             updated.accountID = selectedAccount?.id
             updated.fromAccountID = nil
             updated.toAccountID = nil
+            updated.categoryID = selectedCategoryID
         case .income:
             updated.amount = abs(amount)
             updated.accountID = selectedAccount?.id
             updated.fromAccountID = nil
             updated.toAccountID = nil
+            updated.categoryID = selectedCategoryID
         case .transfer:
             updated.amount = abs(amount)
             updated.accountID = nil
             updated.fromAccountID = fromAccount?.id
             updated.toAccountID = toAccount?.id
+            updated.categoryID = nil
         }
         
+        // Nur fragen, wenn income/expense und Kategorie gesetzt ist und (neu gesetzt oder geändert)
+        if (updated.kind == .income || updated.kind == .expense),
+           let catID = updated.categoryID {
+            let wasCategory = transaction.categoryID
+            let changedOrSet = wasCategory == nil || wasCategory != catID
+            if changedOrSet {
+                let count = store.countPastUncategorizedTransactions(matchingName: updated.name, before: updated.date)
+                if count > 0 {
+                    pendingApplyCategoryID = catID
+                    pendingName = updated.name
+                    pendingDate = updated.date
+                    pendingUpdatedTx = updated
+                    pendingCount = count
+                    showApplyToPastDialog = true
+                    return
+                }
+            }
+        }
+        
+        // Kein Dialog nötig -> direkt speichern
         store.updateTransaction(updated)
         dismiss()
     }
     
-    // Gemeinsame Konto-Optionen (gruppiert)
     @ViewBuilder
     private func accountOptions() -> some View {
         ForEach(AccountCategory.allCases) { cat in
@@ -693,6 +799,97 @@ struct EditTransactionView: View {
                         .tag(Optional(acc) as Account?)
                     }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Shared Category UI used here (local copies so this file compiles)
+
+struct CategoryPickerView: View {
+    @EnvironmentObject var store: FinanceStore
+    @Binding var selectedID: UUID?
+    
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: 104), spacing: 8)]
+    }
+    
+    var body: some View {
+        let cats = store.categories
+        if cats.isEmpty {
+            Text("Keine Kategorien vorhanden").foregroundStyle(.secondary)
+        } else {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                ForEach(cats) { cat in
+                    CategoryChip(cat: cat, isSelected: selectedID == cat.id) {
+                        selectedID = (selectedID == cat.id) ? nil : cat.id
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Kategorien")
+        }
+    }
+}
+
+private struct CategoryChip: View {
+    let cat: TransactionCategory
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(cat.swiftUIColor)
+                    .frame(width: 10, height: 10)
+                Text(cat.name)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? cat.swiftUIColor.opacity(0.15) : Color.secondary.opacity(0.12))
+            .foregroundStyle(isSelected ? cat.swiftUIColor : .primary)
+            .clipShape(Capsule())
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// Entfernt: WrapTagsView und SizePreferenceKey (Root-Cause)
+struct CreateOrEditCategoryView: View {
+    @EnvironmentObject var store: FinanceStore
+    @Environment(\.dismiss) private var dismiss
+    
+    var onCreate: (TransactionCategory) -> Void
+    
+    @State private var name: String = ""
+    @State private var color: Color = .blue
+    
+    var body: some View {
+        Form {
+            Section("Kategorie") {
+                TextField("Name", text: $name)
+                ColorPicker("Farbe", selection: $color, supportsOpacity: false)
+            }
+        }
+        .navigationTitle("Kategorie erstellen")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Abbrechen") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Hinzufügen") {
+                    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let cat = store.addCategory(name: trimmed, color: color)
+                    onCreate(cat)
+                    dismiss()
+                }
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }

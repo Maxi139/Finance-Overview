@@ -45,6 +45,68 @@ enum TransactionKind: String, CaseIterable, Identifiable, Codable {
     var id: String { rawValue }
 }
 
+// Neu: Spartopf
+struct SavingsPot: Identifiable, Hashable, Codable {
+    let id: UUID
+    var accountID: UUID
+    var name: String
+    var goal: Double
+    var note: String?
+    
+    init(id: UUID = UUID(), accountID: UUID, name: String, goal: Double, note: String? = nil) {
+        self.id = id
+        self.accountID = accountID
+        self.name = name
+        self.goal = goal
+        self.note = note
+    }
+}
+
+// Neu: frei definierbare Buchungskategorien (Tags)
+struct TransactionCategory: Identifiable, Hashable, Codable {
+    let id: UUID
+    var name: String
+    // Farbe als RGBA gespeichert (Codable)
+    var color: ColorValue
+    
+    init(id: UUID = UUID(), name: String, color: ColorValue) {
+        self.id = id
+        self.name = name
+        self.color = color
+    }
+    
+    var swiftUIColor: Color {
+        color.color
+    }
+}
+
+// Codable Farbdarstellung für SwiftUI Color
+struct ColorValue: Hashable, Codable {
+    var r: Double
+    var g: Double
+    var b: Double
+    var a: Double
+    
+    init(r: Double, g: Double, b: Double, a: Double = 1.0) {
+        self.r = r; self.g = g; self.b = b; self.a = a
+    }
+    
+    init(color: Color) {
+        #if canImport(UIKit)
+        let ui = UIColor(color)
+        var rr: CGFloat = 0, gg: CGFloat = 0, bb: CGFloat = 0, aa: CGFloat = 0
+        ui.getRed(&rr, green: &gg, blue: &bb, alpha: &aa)
+        self.r = Double(rr); self.g = Double(gg); self.b = Double(bb); self.a = Double(aa)
+        #else
+        self.r = 0.2; self.g = 0.5; self.b = 0.9; self.a = 1
+        #endif
+    }
+    
+    var color: Color {
+        Color(.sRGB, red: r, green: g, blue: b, opacity: a)
+    }
+}
+
 struct FinanceTransaction: Identifiable, Hashable, Codable {
     let id: UUID
     var date: Date
@@ -54,7 +116,13 @@ struct FinanceTransaction: Identifiable, Hashable, Codable {
     var accountID: UUID?        // für Einnahmen/Ausgaben
     var fromAccountID: UUID?    // für Umbuchungen
     var toAccountID: UUID?      // für Umbuchungen
+    // Neu: Spartopf-Annotation bei Transfers
+    var fromPotID: UUID?
+    var toPotID: UUID?
+    
     var note: String?
+    // Neu: Kategorie-Zuordnung
+    var categoryID: UUID?
     
     init(id: UUID = UUID(),
          date: Date,
@@ -64,7 +132,10 @@ struct FinanceTransaction: Identifiable, Hashable, Codable {
          accountID: UUID? = nil,
          fromAccountID: UUID? = nil,
          toAccountID: UUID? = nil,
-         note: String? = nil) {
+         fromPotID: UUID? = nil,
+         toPotID: UUID? = nil,
+         note: String? = nil,
+         categoryID: UUID? = nil) {
         self.id = id
         self.date = date
         self.name = name
@@ -73,7 +144,10 @@ struct FinanceTransaction: Identifiable, Hashable, Codable {
         self.accountID = accountID
         self.fromAccountID = fromAccountID
         self.toAccountID = toAccountID
+        self.fromPotID = fromPotID
+        self.toPotID = toPotID
         self.note = note
+        self.categoryID = categoryID
     }
 }
 

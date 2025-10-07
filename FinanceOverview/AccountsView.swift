@@ -16,108 +16,168 @@ struct AccountsView: View {
     
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(AccountCategory.allCases, id: \.id) { cat in
-                    Section(cat.rawValue) {
-                        ForEach(topLevelAccounts(for: cat), id: \.id) { acc in
-                            accountCell(acc)
-                            // Unterkonten
-                            ForEach(subaccounts(of: acc), id: \.id) { sub in
-                                accountCell(sub, isSub: true)
-                            }
+            contentList
+                .navigationTitle("Konten")
+                .toolbar { topToolbar }
+                .sheetsAndAlerts
+        }
+    }
+    
+    // MARK: - Split Views
+    
+    private var contentList: some View {
+        List {
+            accountsSections
+            if !store.investments.isEmpty {
+                investmentsSection
+            }
+            debtsSection
+        }
+    }
+    
+    private var accountsSections: some View {
+        ForEach(AccountCategory.allCases, id: \.id) { cat in
+            Section(cat.rawValue) {
+                ForEach(topLevelAccounts(for: cat), id: \.id) { acc in
+                    // Hauptkonto-Zeile
+                    accountCell(acc)
+                    // Spartöpfe des Hauptkontos
+                    let potsMain = store.pots(for: acc)
+                    if !potsMain.isEmpty {
+                        ForEach(potsMain, id: \.id) { pot in
+                            potRowCompact(account: acc, pot: pot)
                         }
                     }
-                }
-                
-                if !store.investments.isEmpty {
-                    Section("Geldanlagen") {
-                        ForEach(store.investments, id: \.id) { inv in
-                            HStack {
-                                Text(inv.name)
-                                Spacer()
-                                Text(formatCurrency(inv.value))
+                    // Unterkonten + deren Töpfe
+                    ForEach(subaccounts(of: acc), id: \.id) { sub in
+                        accountCell(sub, isSub: true)
+                        let potsSub = store.pots(for: sub)
+                        if !potsSub.isEmpty {
+                            ForEach(potsSub, id: \.id) { pot in
+                                potRowCompact(account: sub, pot: pot, isUnderSubaccount: true)
                             }
-                            .swipeActions {
-                                Button(role: .destructive) {
-                                    store.removeInvestment(inv)
-                                } label: { Label("Entfernen", systemImage: "trash") }
-                            }
-                        }
-                    }
-                }
-                
-                // Schulden
-                Section {
-                    if openDebts.isEmpty {
-                        Button {
-                            showAddDebt = true
-                        } label: {
-                            Label("Neue Schuld hinzufügen", systemImage: "text.badge.plus")
-                        }
-                    } else {
-                        ForEach(openDebtsSorted, id: \.id) { debt in
-                            debtRow(debt)
-                        }
-                        Button {
-                            showAddDebt = true
-                        } label: {
-                            Label("Neue Schuld", systemImage: "text.badge.plus")
-                        }
-                    }
-                } header: {
-                    Text("Schulden")
-                } footer: {
-                    if !openDebts.isEmpty {
-                        HStack {
-                            Text("Summe ich schulde:")
-                            Spacer()
-                            Text(formatCurrency(sumIOwe)).foregroundStyle(.red)
-                        }
-                        HStack {
-                            Text("Summe mir wird geschuldet:")
-                            Spacer()
-                            Text(formatCurrency(sumOwedToMe)).foregroundStyle(.green)
                         }
                     }
                 }
             }
-            .navigationTitle("Konten")
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    // Datenverwaltung (ohne Tutorial)
-                    Menu {
-                        Button {
-                            store.loadDemoData()
-                        } label: {
-                            Label("Demo-Daten laden", systemImage: "tray.and.arrow.down")
-                        }
-                        Button(role: .destructive) {
-                            confirmReset = true
-                        } label: {
-                            Label("Alle Daten löschen", systemImage: "trash")
-                        }
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    
-                    Button {
-                        showAddInvestment = true
-                    } label: { Image(systemName: "banknote") }
-                    
-                    Button {
-                        showAddAccount = true
-                    } label: { Image(systemName: "plus") }
+        }
+    }
+    
+    private var investmentsSection: some View {
+        Section("Geldanlagen") {
+            ForEach(store.investments, id: \.id) { inv in
+                HStack {
+                    Text(inv.name)
+                    Spacer()
+                    Text(formatCurrency(inv.value))
+                }
+                .swipeActions {
+                    Button(role: .destructive) {
+                        Haptics.error()
+                        store.removeInvestment(inv)
+                    } label: { Label("Entfernen", systemImage: "trash") }
                 }
             }
-            // Konto hinzufügen
+        }
+    }
+    
+    private var debtsSection: some View {
+        Section {
+            if openDebts.isEmpty {
+                Button {
+                    Haptics.lightTap()
+                    showAddDebt = true
+                } label: {
+                    Label("Neue Schuld hinzufügen", systemImage: "text.badge.plus")
+                }
+            } else {
+                ForEach(openDebtsSorted, id: \.id) { debt in
+                    debtRow(debt)
+                }
+                Button {
+                    Haptics.lightTap()
+                    showAddDebt = true
+                } label: {
+                    Label("Neue Schuld", systemImage: "text.badge.plus")
+                }
+            }
+        } header: {
+            Text("Schulden")
+        } footer: {
+            if !openDebts.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Summe ich schulde:")
+                        Spacer()
+                        Text(formatCurrency(sumIOwe)).foregroundStyle(.red)
+                    }
+                    HStack {
+                        Text("Summe mir wird geschuldet:")
+                        Spacer()
+                        Text(formatCurrency(sumOwedToMe)).foregroundStyle(.green)
+                    }
+                }
+            }
+        }
+    }
+    
+    private var topToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Menu {
+                Button {
+                    Haptics.lightTap()
+                    store.loadDemoData()
+                } label: {
+                    Label("Demo-Daten laden", systemImage: "tray.and.arrow.down")
+                }
+                Button(role: .destructive) {
+                    Haptics.warning()
+                    confirmReset = true
+                } label: {
+                    Label("Alle Daten löschen", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "gearshape")
+            }
+            
+            // Plus-Menü mit drei Aktionen
+            Menu {
+                Button {
+                    Haptics.lightTap()
+                    showAddAccount = true
+                } label: {
+                    Label("Konto hinzufügen", systemImage: "creditcard.fill")
+                }
+                Button {
+                    Haptics.lightTap()
+                    showAddInvestment = true
+                } label: {
+                    Label("Geldanlage hinzufügen", systemImage: "banknote")
+                }
+                Button {
+                    Haptics.lightTap()
+                    showAddDebt = true
+                } label: {
+                    Label("Schuld hinzufügen", systemImage: "text.badge.plus")
+                }
+            } label: {
+                Image(systemName: "plus")
+            }
+        }
+    }
+    
+    // MARK: - Sheets & Alerts
+    
+    private var sheetsAndAlerts: some View {
+        EmptyView()
             .sheet(isPresented: $showAddAccount) {
+                // WICHTIG: NavigationStack wieder aktivieren, damit Toolbar sichtbar ist
                 NavigationStack {
                     AccountFormView(original: nil)
                         .environmentObject(store)
                 }
                 .presentationDetents([.large])
             }
-            // Geldanlage hinzufügen
             .sheet(isPresented: $showAddInvestment) {
                 NavigationStack {
                     InvestmentFormView()
@@ -125,7 +185,6 @@ struct AccountsView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
-            // Konto bearbeiten
             .sheet(item: $editingAccount) { acc in
                 NavigationStack {
                     AccountFormView(original: acc)
@@ -133,7 +192,6 @@ struct AccountsView: View {
                 }
                 .presentationDetents([.large])
             }
-            // Schuld hinzufügen
             .sheet(isPresented: $showAddDebt) {
                 NavigationStack {
                     DebtFormView(original: nil)
@@ -141,7 +199,6 @@ struct AccountsView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
-            // Schuld bearbeiten
             .sheet(item: $editingDebt) { d in
                 NavigationStack {
                     DebtFormView(original: d)
@@ -152,13 +209,15 @@ struct AccountsView: View {
             .alert("Wirklich alle Daten löschen?", isPresented: $confirmReset) {
                 Button("Abbrechen", role: .cancel) {}
                 Button("Löschen", role: .destructive) {
+                    Haptics.error()
                     store.resetToEmpty()
                 }
             } message: {
                 Text("Diese Aktion kann nicht rückgängig gemacht werden.")
             }
-        }
     }
+    
+    // MARK: - Derived Data
     
     private var openDebts: [Debt] {
         store.debts.filter { !$0.isSettled }
@@ -191,8 +250,12 @@ struct AccountsView: View {
         store.accounts.filter { $0.parentAccountID == account.id }
     }
     
+    // MARK: - Rows
+    
     private func accountCell(_ acc: Account, isSub: Bool = false) -> some View {
-        NavigationLink {
+        let free = store.freeBalance(for: acc)
+        let inPots = store.totalSavedInPots(for: acc)
+        return NavigationLink {
             AccountDetailView(account: acc)
         } label: {
             HStack {
@@ -205,34 +268,90 @@ struct AccountsView: View {
                         if isSub { Text("Unterkonto").font(.caption2).padding(4).background(.secondary.opacity(0.15), in: Capsule()) }
                         if acc.isAvailable { Text("verfügbar").font(.caption2).padding(4).background(.green.opacity(0.15), in: Capsule()) }
                     }
+                    Text("In Töpfen: \(formatCurrency(inPots))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text(formatCurrency(store.balance(for: acc))).font(.callout.weight(.semibold))
+                VStack(alignment: .trailing) {
+                    Text(formatCurrency(free)).font(.callout.weight(.semibold))
+                    Text("frei").font(.caption2).foregroundStyle(.secondary)
+                }
             }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
+                Haptics.error()
                 store.removeAccount(acc)
             } label: { Label("Löschen", systemImage: "trash") }
         }
         .swipeActions(edge: .leading) {
             Button {
+                Haptics.mediumTap()
                 store.setPrimary(acc)
             } label: { Label("Hauptkonto", systemImage: "star") }
             Button {
-                // Unterkonto erstellen
-                let sub = Account(name: "\(acc.name) – Unterkonto", category: acc.category, initialBalance: 0, isAvailable: acc.isAvailable, parentAccountID: acc.id)
+                let sub = Account(name: "\(acc.name) – Unterkonto", category: acc.category, initialBalance: 0, isAvailable: acc.isAvailable, isPrimary: false, parentAccountID: acc.id)
                 store.addAccount(sub)
+                Haptics.success()
             } label: { Label("Unterkonto", systemImage: "arrow.branch") }
         }
         .contextMenu {
-            Button("Bearbeiten") { editingAccount = acc }
+            Button("Bearbeiten") {
+                Haptics.lightTap()
+                editingAccount = acc
+            }
             Button(acc.isAvailable ? "Als nicht verfügbar markieren" : "Als verfügbar markieren") {
                 var copy = acc
                 copy.isAvailable.toggle()
                 store.updateAccount(copy)
+                Haptics.lightTap()
             }
         }
+    }
+    
+    private func potRowCompact(account: Account, pot: SavingsPot, isUnderSubaccount: Bool = false) -> some View {
+        let saved = store.savedAmount(for: pot)
+        let progress = pot.goal > 0 ? min(saved / pot.goal, 1.0) : 0
+        // Navigiert zur Konto-Detailseite
+        return NavigationLink {
+            AccountDetailView(account: account)
+        } label: {
+            HStack(spacing: 10) {
+                // Einrückungsindikator: Punktebene unter Konto
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: isUnderSubaccount ? 28 : 16) // etwas mehr Einzug unter Unterkonto
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Image(systemName: "target")
+                            .foregroundStyle(.secondary)
+                        Text(pot.name)
+                            .font(.subheadline)
+                        Spacer()
+                        Text(percentString(progress))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    ProgressView(value: progress)
+                        .tint(.accentColor)
+                    HStack(spacing: 8) {
+                        Text("Gespart: \(formatCurrency(saved))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        if pot.goal > 0 {
+                            Text("Ziel: \(formatCurrency(pot.goal))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowSeparator(.hidden, edges: .top) // optisch enger unter dem Konto
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 6, trailing: 16))
     }
     
     private func debtRow(_ debt: Debt) -> some View {
@@ -262,10 +381,14 @@ struct AccountsView: View {
                 .foregroundStyle(debt.direction == .iOwe ? .red : .green)
         }
         .contentShape(Rectangle())
-        .onTapGesture { editingDebt = debt }
+        .onTapGesture {
+            Haptics.lightTap()
+            editingDebt = debt
+        }
         .swipeActions(edge: .leading) {
             Button {
                 store.toggleSettled(debt)
+                Haptics.success()
             } label: {
                 Label("Erledigt", systemImage: "checkmark.circle")
             }
@@ -273,263 +396,14 @@ struct AccountsView: View {
         }
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) {
+                Haptics.error()
                 store.removeDebt(debt)
             } label: { Label("Löschen", systemImage: "trash") }
         }
     }
 }
 
-// MARK: - Formulare im selben File
-
-struct AccountFormView: View {
-    @EnvironmentObject var store: FinanceStore
-    @Environment(\.dismiss) private var dismiss
-    
-    let original: Account?
-    
-    @State private var name: String
-    @State private var category: AccountCategory
-    @State private var initialBalance: Double
-    @State private var isAvailable: Bool
-    
-    init(original: Account?) {
-        self.original = original
-        if let acc = original {
-            _name = State(initialValue: acc.name)
-            _category = State(initialValue: acc.category)
-            _initialBalance = State(initialValue: acc.initialBalance)
-            _isAvailable = State(initialValue: acc.isAvailable)
-        } else {
-            _name = State(initialValue: "")
-            _category = State(initialValue: .giro)
-            _initialBalance = State(initialValue: 0)
-            _isAvailable = State(initialValue: true)
-        }
-    }
-    
-    var body: some View {
-        Form {
-            Section("Allgemein") {
-                TextField("Name", text: $name)
-                Picker("Kategorie", selection: $category) {
-                    ForEach(AccountCategory.allCases) { cat in
-                        Text(cat.rawValue).tag(cat)
-                    }
-                }
-                Toggle("Verfügbar", isOn: $isAvailable)
-            }
-            Section("Startsaldo") {
-                HStack {
-                    Text("Anfangsbestand")
-                    Spacer()
-                    TextField("0", value: $initialBalance, format: .number)
-                        .multilineTextAlignment(.trailing)
-                        .keyboardType(.decimalPad)
-                        .frame(maxWidth: 120)
-                }
-                .accessibilityElement(children: .combine)
-            }
-        }
-        .navigationTitle(original == nil ? "Konto hinzufügen" : "Konto bearbeiten")
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Abbrechen") { dismiss() }
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Speichern") { save() }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-    }
-    
-    private func save() {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if var acc = original {
-            acc.name = trimmedName
-            acc.category = category
-            acc.initialBalance = initialBalance
-            acc.isAvailable = isAvailable
-            store.updateAccount(acc)
-        } else {
-            let new = Account(name: trimmedName, category: category, initialBalance: initialBalance, isAvailable: isAvailable)
-            store.addAccount(new)
-        }
-        dismiss()
-    }
+private extension View {
+    // Compose all sheets/alerts to keep body simple
+    var sheetsAndAlerts: some View { self }
 }
-
-private struct InvestmentFormView: View {
-    @EnvironmentObject var store: FinanceStore
-    @Environment(\.dismiss) private var dismiss
-    
-    @State private var name: String = ""
-    @State private var value: Double = 0
-    
-    var body: some View {
-        Form {
-            Section("Geldanlage") {
-                TextField("Name", text: $name)
-                HStack {
-                    Text("Wert")
-                    Spacer()
-                    TextField("0", value: $value, format: .number)
-                        .multilineTextAlignment(.trailing)
-                        .keyboardType(.decimalPad)
-                        .frame(maxWidth: 120)
-                }
-                .accessibilityElement(children: .combine)
-            }
-        }
-        .navigationTitle("Geldanlage hinzufügen")
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Abbrechen") { dismiss() }
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Hinzufügen") {
-                    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                    store.addInvestment(Investment(name: trimmed, value: value))
-                    dismiss()
-                }
-                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-    }
-}
-
-// MARK: - Debt Formular
-
-private struct DebtFormView: View {
-    @EnvironmentObject var store: FinanceStore
-    @Environment(\.dismiss) private var dismiss
-    
-    let original: Debt?
-    
-    @State private var title: String
-    @State private var amount: Double
-    @State private var direction: DebtDirection
-    @State private var account: Account?
-    @State private var hasDueDate: Bool
-    @State private var dueDate: Date
-    @State private var note: String
-    @State private var isSettled: Bool
-    
-    init(original: Debt?) {
-        self.original = original
-        if let d = original {
-            _title = State(initialValue: d.title)
-            _amount = State(initialValue: d.amount)
-            _direction = State(initialValue: d.direction)
-            _hasDueDate = State(initialValue: d.dueDate != nil)
-            _dueDate = State(initialValue: d.dueDate ?? Date())
-            _note = State(initialValue: d.note ?? "")
-            _isSettled = State(initialValue: d.isSettled)
-            // account wird im body via onAppear aufgelöst
-            _account = State(initialValue: nil)
-        } else {
-            _title = State(initialValue: "")
-            _amount = State(initialValue: 0)
-            _direction = State(initialValue: .iOwe)
-            _hasDueDate = State(initialValue: false)
-            _dueDate = State(initialValue: Date())
-            _note = State(initialValue: "")
-            _isSettled = State(initialValue: false)
-            _account = State(initialValue: nil)
-        }
-    }
-    
-    var body: some View {
-        Form {
-            Section("Schuld") {
-                Picker("Richtung", selection: $direction) {
-                    ForEach(DebtDirection.allCases) { d in
-                        Text(d.rawValue).tag(d)
-                    }
-                }
-                .pickerStyle(.segmented)
-                TextField("Titel", text: $title)
-                HStack {
-                    Text("Betrag")
-                    Spacer()
-                    TextField("0", value: $amount, format: .number)
-                        .multilineTextAlignment(.trailing)
-                        .keyboardType(.decimalPad)
-                        .frame(maxWidth: 120)
-                }
-            }
-            Section("Zuordnung & Fälligkeit") {
-                accountPicker(selection: $account)
-                Toggle("Fälligkeitsdatum", isOn: $hasDueDate)
-                if hasDueDate {
-                    DatePicker("Fällig am", selection: $dueDate, displayedComponents: .date)
-                }
-            }
-            Section("Notiz") {
-                TextField("optional", text: $note, axis: .vertical)
-                    .lineLimit(3, reservesSpace: true)
-            }
-            if original != nil {
-                Section {
-                    Toggle("Erledigt", isOn: $isSettled)
-                }
-            }
-        }
-        .navigationTitle(original == nil ? "Schuld hinzufügen" : "Schuld bearbeiten")
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Abbrechen") { dismiss() }
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Speichern") { save() }
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || amount <= 0)
-            }
-        }
-        .onAppear {
-            if let d = original, let id = d.accountID {
-                account = store.accounts.first(where: { $0.id == id })
-            }
-        }
-    }
-    
-    private func save() {
-        let accID = account?.id
-        let finalDue = hasDueDate ? dueDate : nil
-        if var d = original {
-            d.title = title
-            d.amount = amount
-            d.direction = direction
-            d.accountID = accID
-            d.dueDate = finalDue
-            d.note = note.isEmpty ? nil : note
-            d.isSettled = isSettled
-            store.updateDebt(d)
-        } else {
-            let d = Debt(title: title, amount: amount, direction: direction, dueDate: finalDue, accountID: accID, note: note.isEmpty ? nil : note, isSettled: false)
-            store.addDebt(d)
-        }
-        dismiss()
-    }
-    
-    private func accountPicker(selection: Binding<Account?>) -> some View {
-        Picker("Konto", selection: selection) {
-            Text("Keines").tag(Optional<Account>.none)
-            ForEach(AccountCategory.allCases) { cat in
-                let accountsInCat = store.accounts
-                    .filter { $0.category == cat }
-                    .sorted { lhs, rhs in
-                        if lhs.isPrimary != rhs.isPrimary { return lhs.isPrimary && !rhs.isPrimary }
-                        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-                    }
-                if !accountsInCat.isEmpty {
-                    Section(cat.rawValue) {
-                        ForEach(accountsInCat) { acc in
-                            Text(acc.name).tag(Optional(acc))
-                        }
-                    }
-                }
-            }
-        }
-        .pickerStyle(.navigationLink)
-    }
-}
-

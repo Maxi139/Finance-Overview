@@ -12,6 +12,11 @@ struct OnboardingAccountsSelectionView: View {
     // Auswahl der Konten in Schritt 1
     @State private var selectedAccountIDs: Set<UUID> = []
     
+    // Spartopf-Erstellung/Zuweisung
+    @State private var potCreationAccount: Account?
+    @State private var editingPot: SavingsPot?
+    @State private var transferContext: PotTransferContext?
+    
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
@@ -34,11 +39,39 @@ struct OnboardingAccountsSelectionView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .sheet(isPresented: $showAddAccount, onDismiss: reloadAfterAdd) {
+            // Entfernt den inneren NavigationStack – verhindert Präsentationsprobleme
+            AccountFormView(original: nil)
+                .environmentObject(store)
+            .presentationDetents([.large])
+        }
+        // Spartopf erstellen/bearbeiten
+        .sheet(item: $potCreationAccount) { acc in
             NavigationStack {
-                AccountFormView(original: nil)
+                SavingsPotFormView(original: nil, account: acc) { new in
+                    store.addPot(new)
+                }
+                .environmentObject(store)
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(item: $editingPot) { pot in
+            NavigationStack {
+                // Finde das zugehörige Konto
+                let acc = store.accounts.first { $0.id == pot.accountID } ?? store.primaryAccount ?? store.accounts.first!
+                SavingsPotFormView(original: pot, account: acc) { updated in
+                    store.updatePot(updated)
+                }
+                .environmentObject(store)
+            }
+            .presentationDetents([.medium, .large])
+        }
+        // Geld in/aus Topf verschieben
+        .sheet(item: $transferContext) { ctx in
+            NavigationStack {
+                PotTransferSheet(account: ctx.account, pot: ctx.pot, toPot: ctx.toPot)
                     .environmentObject(store)
             }
-            .presentationDetents([.large])
+            .presentationDetents([.medium, .large])
         }
         .onChange(of: showAddAccount) { open in
             // Falls das Sheet geschlossen wurde, Vorauswahl/Refresh sicherstellen
@@ -79,6 +112,7 @@ struct OnboardingAccountsSelectionView: View {
                 .foregroundStyle(.secondary)
             HStack {
                 Button {
+                    Haptics.lightTap()
                     store.resetToEmpty()
                     selectedAccountIDs.removeAll()
                     step = 1
@@ -88,6 +122,7 @@ struct OnboardingAccountsSelectionView: View {
                 .buttonStyle(.borderedProminent)
                 
                 Button {
+                    Haptics.lightTap()
                     store.loadDemoData()
                     // nach Laden: Hauptkonto (falls vorhanden) vorselektieren
                     if let p = store.primaryAccount {
@@ -104,63 +139,206 @@ struct OnboardingAccountsSelectionView: View {
         }
     }
     
-    // Schritt 1: Konten auswählen (mind. 1)
+    // Schritt 1: Konten auswählen (mind. 1) + Spartöpfe modern integriert
     private var selectAccountsStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Konten auswählen")
-                .font(.headline)
-            if store.accounts.isEmpty {
-                Text("Noch keine Konten vorhanden. Füge jetzt eines hinzu.")
-                    .foregroundStyle(.secondary)
-                Button {
-                    showAddAccount = true
-                } label: {
-                    Label("Konto hinzufügen", systemImage: "plus.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
-            } else {
-                Text("Wähle mindestens ein Konto, das du verwenden möchtest. Du kannst später weitere hinzufügen.")
-                    .foregroundStyle(.secondary)
-                List {
-                    ForEach(store.accounts) { acc in
-                        accountRow(acc)
-                    }
-                }
-                // Force-Refresh der List, wenn sich die Konten ändern
-                .id(store.accounts.map(\.id))
-                .listStyle(.insetGrouped)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Konten auswählen")
+                    .font(.headline)
                 
-                Button {
-                    showAddAccount = true
-                } label: {
-                    Label("Weiteres Konto hinzufügen", systemImage: "plus")
+                if store.accounts.isEmpty {
+                    Text("Noch keine Konten vorhanden. Füge jetzt eines hinzu.")
+                        .foregroundStyle(.secondary)
+                    Button {
+                        Haptics.lightTap()
+                        showAddAccount = true
+                    } label: {
+                        Label("Konto hinzufügen", systemImage: "plus.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Text("Wähle mindestens ein Konto. Erstelle optional Spartöpfe (z. B. Notgroschen, Urlaub) wie im Buchungs-Flow. Du kannst später weitere hinzufügen.")
+                        .foregroundStyle(.secondary)
+                    
+                    VStack(spacing: 12) {
+                        ForEach(store.accounts) { acc in
+                            accountCard(acc)
+                        }
+                    }
+                    
+                    Button {
+                        Haptics.lightTap()
+                        showAddAccount = true
+                    } label: {
+                        Label("Weiteres Konto hinzufügen", systemImage: "plus")
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.top, 4)
                 }
-                .buttonStyle(.bordered)
             }
+            .padding(.vertical, 8)
         }
     }
     
-    private func accountRow(_ acc: Account) -> some View {
-        Button {
-            toggleSelection(acc.id)
-        } label: {
-            HStack {
+    // Moderne Konto-Karte mit Auswahl + Spartöpfen
+    private func accountCard(_ acc: Account) -> some View {
+        let isSelected = selectedAccountIDs.contains(acc.id)
+        let free = store.freeBalance(for: acc)
+        let inPots = store.totalSavedInPots(for: acc)
+        let pots = store.pots(for: acc)
+        
+        return VStack(alignment: .leading, spacing: 12) {
+            // Kopfzeile: Konto + Auswahl
+            HStack(spacing: 12) {
+                Button {
+                    Haptics.lightTap()
+                    toggleSelection(acc.id)
+                } label: {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        if acc.isPrimary { Image(systemName: "star.fill").foregroundStyle(.yellow) }
+                    HStack(spacing: 6) {
+                        if acc.isPrimary { Image(systemName: "star.fill").foregroundStyle(Color.yellow) }
                         Text(acc.name)
+                            .font(.headline)
+                        if acc.isSubaccount {
+                            Text("Unterkonto")
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.secondary.opacity(0.15), in: Capsule())
+                        }
+                        if acc.isAvailable {
+                            Text("verfügbar")
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.green.opacity(0.15), in: Capsule())
+                        }
                     }
-                    Text(formatCurrency(store.balance(for: acc)))
+                    HStack(spacing: 12) {
+                        Label {
+                            Text(formatCurrency(inPots))
+                        } icon: {
+                            Image(systemName: "target").foregroundStyle(Color.secondary)
+                        }
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        
+                        Label {
+                            Text(formatCurrency(free))
+                        } icon: {
+                            Image(systemName: "wallet.pass").foregroundStyle(Color.secondary)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
-                if selectedAccountIDs.contains(acc.id) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.tint)
-                } else {
-                    Image(systemName: "circle")
-                        .foregroundStyle(.secondary)
+                // Schnellaktion: Hauptkonto setzen
+                Button {
+                    Haptics.mediumTap()
+                    store.setPrimary(acc)
+                } label: {
+                    Image(systemName: acc.isPrimary ? "star.fill" : "star")
+                        .foregroundStyle(acc.isPrimary ? Color.yellow : Color.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            
+            // Spartopf Vorschläge (nur wenn noch keine Töpfe vorhanden)
+            if pots.isEmpty {
+                suggestionChips(for: acc)
+            }
+            
+            // Bestehende Töpfe als Chips-Grid mit Mini-Progress und Aktionen
+            if !pots.isEmpty {
+                PotChipsGrid(
+                    account: acc,
+                    pots: pots,
+                    savedAmount: { store.savedAmount(for: $0) },
+                    onAssign: { pot in
+                        Haptics.lightTap()
+                        transferContext = .init(account: acc, pot: pot, toPot: true)
+                    },
+                    onWithdraw: { pot in
+                        Haptics.lightTap()
+                        transferContext = .init(account: acc, pot: pot, toPot: false)
+                    },
+                    onEdit: { pot in
+                        Haptics.lightTap()
+                        editingPot = pot
+                    }
+                )
+            }
+            
+            // Aktionen: neuen Topf erstellen
+            HStack(spacing: 8) {
+                Button {
+                    Haptics.lightTap()
+                    potCreationAccount = acc
+                } label: {
+                    Label("Neuen Spartopf", systemImage: "target")
+                }
+                .buttonStyle(.bordered)
+                
+                if !pots.isEmpty {
+                    Button {
+                        Haptics.lightTap()
+                        // Komfort: dem zuletzt erstellten Topf direkt zuweisen
+                        if let last = pots.last {
+                            transferContext = .init(account: acc, pot: last, toPot: true)
+                        } else {
+                            potCreationAccount = acc
+                        }
+                    } label: {
+                        Label("Geld zuweisen", systemImage: "arrow.down.to.line")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(.top, 4)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemBackground))
+        )
+    }
+    
+    // Vorschlagschips ähnlich Category-Chips aus dem AddTransaction-Flow
+    private func suggestionChips(for account: Account) -> some View {
+        let suggestions: [(title: String, goal: Double, icon: String)] = [
+            ("Notgroschen", 3000, "shield.lefthalf.filled"),
+            ("Urlaub", 1200, "sun.max.fill"),
+            ("Technik", 800, "desktopcomputer")
+        ]
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Spartopf-Vorschläge")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(suggestions.enumerated()), id: \.offset) { _, s in
+                        Button {
+                            let pot = SavingsPot(accountID: account.id, name: s.title, goal: s.goal, note: nil)
+                            store.addPot(pot)
+                            Haptics.success()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: s.icon)
+                                Text(s.title)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(Color.secondary.opacity(0.12), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
         }
@@ -179,9 +357,10 @@ struct OnboardingAccountsSelectionView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Fertig!")
                 .font(.headline)
-            Text("Du kannst jetzt Buchungen erfassen, Konten verwalten und Statistiken ansehen. Das Tutorial findest du später im Konten-Tab über das Zahnrad-Menü.")
+            Text("Du kannst jetzt Buchungen erfassen, Konten verwalten, Spartöpfe nutzen und Statistiken ansehen. Das Tutorial findest du später im Konten-Tab über das Zahnrad-Menü.")
                 .foregroundStyle(.secondary)
             Button {
+                Haptics.success()
                 didSeeOnboarding = true
                 dismiss()
             } label: {
@@ -194,11 +373,15 @@ struct OnboardingAccountsSelectionView: View {
     private var footer: some View {
         HStack {
             if step > 0 {
-                Button("Zurück") { step -= 1 }
-                    .buttonStyle(.bordered)
+                Button("Zurück") {
+                    Haptics.lightTap()
+                    step -= 1
+                }
+                .buttonStyle(.bordered)
             }
             Spacer()
             Button(step < 2 ? "Weiter" : "Schließen") {
+                Haptics.lightTap()
                 if step == 1 {
                     // Falls noch kein Hauptkonto gesetzt ist, eines der ausgewählten setzen
                     if let firstSelected = selectedAccountIDs.first,
@@ -253,4 +436,91 @@ struct OnboardingAccountsSelectionView: View {
             }
         }
     }
+}
+
+// MARK: - Pot Chips Grid (ähnlich moderner Flow-Optik)
+
+private struct PotChipsGrid: View {
+    let account: Account
+    let pots: [SavingsPot]
+    let savedAmount: (SavingsPot) -> Double
+    let onAssign: (SavingsPot) -> Void
+    let onWithdraw: (SavingsPot) -> Void
+    let onEdit: (SavingsPot) -> Void
+    
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: 180), spacing: 8)]
+    }
+    
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+            ForEach(pots, id: \.id) { pot in
+                potChip(pot)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Spartöpfe")
+    }
+    
+    private func potChip(_ pot: SavingsPot) -> some View {
+        let saved = savedAmount(pot)
+        let progress = pot.goal > 0 ? min(saved / pot.goal, 1.0) : 0
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(pot.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Text(percentString(progress))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            ProgressView(value: progress)
+                .tint(.accentColor)
+            HStack {
+                Text(formatCurrency(saved))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if pot.goal > 0 {
+                    Text("Ziel: \(formatCurrency(pot.goal))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 6) {
+                Button {
+                    onAssign(pot)
+                } label: {
+                    Label("Zuweisen", systemImage: "arrow.down.to.line")
+                }
+                .buttonStyle(.bordered)
+                
+                Button {
+                    onWithdraw(pot)
+                } label: {
+                    Label("Entnehmen", systemImage: "arrow.up.to.line")
+                }
+                .buttonStyle(.bordered)
+                
+                Button {
+                    onEdit(pot)
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+// MARK: - Helper State Wrapper
+
+private struct PotTransferContext: Identifiable {
+    let id = UUID()
+    let account: Account
+    let pot: SavingsPot
+    let toPot: Bool
 }

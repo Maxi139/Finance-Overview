@@ -18,3 +18,11 @@ let dateFormatterShort: DateFormatter = {
     f.timeStyle = .none
     return f
 }()
+
+// Formats a fractional value (e.g., 0.25) as a localized percentage string (e.g., "25 %")
+func percentString(_ fraction: Double, maximumFractionDigits: Int = 0) -> String {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .percent
+    formatter.maximumFractionDigits = maximumFractionDigits
+    return formatter.string(from: NSNumber(value: fraction)) ?? String(format: "%.0f%%", fraction * 100)
+}

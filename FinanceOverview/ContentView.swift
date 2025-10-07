@@ -5,12 +5,17 @@ import UIKit
 struct ContentView: View {
     @EnvironmentObject var store: FinanceStore
     @AppStorage("appLockEnabled") private var appLockEnabled: Bool = false
+    @Environment(\.scenePhase) private var scenePhase
     
     @State private var isLocked: Bool = false
     @State private var isAuthenticating: Bool = false
     @State private var authErrorMessage: String?
     // Merker: Wurde in dieser App-Sitzung bereits erfolgreich entsperrt?
     @State private var hasAuthenticatedThisSession: Bool = false
+    // Zeitpunkt, wann die App den Fokus verloren hat (inactive/background)
+    @State private var lastUnfocusedAt: Date?
+    // Schwelle in Sekunden
+    private let relockThreshold: TimeInterval = 30
     
     var body: some View {
         TabView {
@@ -29,7 +34,7 @@ struct ContentView: View {
             SettingsView()
                 .tabItem { Label("Einstellungen", systemImage: "gear") }
         }
-        // Erfolgsoverlay (Konfetti)
+        // Erfolgsoverlay (nur 🎉-Konfetti)
         .overlay {
             if let ov = store.successOverlay {
                 GlobalSuccessOverlayView(data: ov)
@@ -47,6 +52,27 @@ struct ContentView: View {
                     }
             }
         }
+        // Pot-Celebration Overlay (volle Emojis 🎉✨🎯💸🏆)
+        .overlay {
+            if let pc = store.potCelebration {
+                PotGoalCelebrationOverlayView(data: pc)
+                    .transition(.opacity)
+                    .ignoresSafeArea()
+                    .onAppear {
+                        let gen = UINotificationFeedbackGenerator()
+                        gen.notificationOccurred(.success)
+                    }
+                    .onTapGesture {
+                        store.potCelebration = nil
+                    }
+                    .task(id: pc.id) {
+                        try? await Task.sleep(nanoseconds: 4_000_000_000)
+                        if store.potCelebration?.id == pc.id {
+                            store.potCelebration = nil
+                        }
+                    }
+            }
+        }
         // App-Lock Overlay – liegt über allem
         .overlay {
             if isLocked && appLockEnabled {
@@ -56,7 +82,7 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            // Nur beim App-Start sperren (einmal pro Prozesslebenszeit)
+            // Beim App-Start sperren (einmal pro Prozesslebenszeit)
             if appLockEnabled && !hasAuthenticatedThisSession {
                 isLocked = true
                 tryAuthIfNeeded()
@@ -73,6 +99,28 @@ struct ContentView: View {
                 // Deaktiviert: sofort entsperren
                 isLocked = false
                 authErrorMessage = nil
+            }
+        }
+        // WICHTIG: Fokus-/Lebenszyklus-Überwachung für Re-Lock nach 30s
+        .onChange(of: scenePhase) { _, newPhase in
+            switch newPhase {
+            case .inactive, .background:
+                // App verliert Fokus (z. B. Control Center, Multitasking, Anruf, App Switcher)
+                lastUnfocusedAt = Date()
+            case .active:
+                // App wieder aktiv: prüfen, ob die Schwelle überschritten wurde
+                if appLockEnabled, let left = lastUnfocusedAt {
+                    let elapsed = Date().timeIntervalSince(left)
+                    if elapsed >= relockThreshold {
+                        // Re-Lock erzwingen, unabhängig von hasAuthenticatedThisSession
+                        isLocked = true
+                        authErrorMessage = nil
+                        isAuthenticating = false
+                        tryAuthIfNeeded(force: true)
+                    }
+                }
+            @unknown default:
+                break
             }
         }
     }
@@ -128,7 +176,7 @@ struct ContentView: View {
                     self.isAuthenticating = false
                     if success {
                         self.isLocked = false
-                        self.hasAuthenticatedThisSession = true // wichtig: nur einmal pro Sitzung
+                        self.hasAuthenticatedThisSession = true
                         self.authErrorMessage = nil
                         let gen = UINotificationFeedbackGenerator()
                         gen.notificationOccurred(.success)
@@ -152,16 +200,20 @@ struct ContentView: View {
     }
 }
 
-// MARK: - GlobalSuccessOverlayView (Konfetti bleibt wie zuvor)
+// MARK: - GlobalSuccessOverlayView (nur 🎉-Konfetti)
 
 private struct GlobalSuccessOverlayView: View {
     let data: SaveSuccessOverlay
     
     var body: some View {
         ZStack {
-            Color.black.opacity(0.15)
+            // Vollflächig System-Hintergrundfarbe, vollständig deckend
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea()
+            
+            // Konfetti + Inhalte
             VStack(spacing: 16) {
-                EmojiConfettiView()
+                EmojiConfettiView(emojis: ["🎉"])
                     .allowsHitTesting(false)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(
@@ -204,9 +256,54 @@ private struct GlobalSuccessOverlayView: View {
     }
 }
 
-// MARK: - 🎉 Emoji-Konfetti via CAEmitterLayer
+// MARK: - 🎯 Pot Goal Celebration Overlay (volle Emojis)
+
+private struct PotGoalCelebrationOverlayView: View {
+    let data: PotCelebrationOverlay
+    
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea()
+            VStack(spacing: 16) {
+                EmojiConfettiView(intensity: .high, emojis: ["🎉","✨","🎯","💸","🏆"])
+                    .allowsHitTesting(false)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(
+                        VStack(spacing: 10) {
+                            Image(systemName: "target")
+                                .font(.system(size: 56, weight: .bold))
+                                .foregroundStyle(.tint)
+                            Text("Ziel erreicht!")
+                                .font(.title2.weight(.bold))
+                            Text(data.potName)
+                                .font(.headline)
+                            VStack(spacing: 4) {
+                                Text("Ziel: \(formatCurrency(data.goal))")
+                                Text("Gespart: \(formatCurrency(data.saved))")
+                                    .foregroundStyle(.secondary)
+                                    .font(.subheadline)
+                            }
+                            .font(.subheadline)
+                            .padding(.top, 4)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.thinMaterial, in: Capsule())
+                        }
+                        .padding()
+                    )
+            }
+        }
+    }
+}
+
+// MARK: - 🎉 Emoji-Konfetti via CAEmitterLayer (parametrisierbar)
 
 private struct EmojiConfettiView: UIViewRepresentable {
+    enum Intensity { case normal, high }
+    var intensity: Intensity = .normal
+    var emojis: [String] = ["🎉"]
+    
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.isUserInteractionEnabled = false
@@ -216,25 +313,28 @@ private struct EmojiConfettiView: UIViewRepresentable {
         emitter.emitterShape = .line
         emitter.emitterSize = CGSize(width: UIScreen.main.bounds.width, height: 1)
         
-        let cell = CAEmitterCell()
-        cell.birthRate = 8
-        cell.lifetime = 5.5
-        cell.lifetimeRange = 1.5
-        cell.velocity = 220
-        cell.velocityRange = 100
-        cell.emissionLongitude = .pi
-        cell.emissionRange = .pi / 6
-        cell.spin = 3.5
-        cell.spinRange = 2.0
-        cell.scale = 0.8
-        cell.scaleRange = 0.4
-        cell.contents = emojiImage("🎉", size: 28)?.cgImage
+        func cell(for emoji: String) -> CAEmitterCell {
+            let cell = CAEmitterCell()
+            cell.birthRate = intensity == .high ? 18 : 8
+            cell.lifetime = 6.0
+            cell.lifetimeRange = 2.0
+            cell.velocity = intensity == .high ? 280 : 220
+            cell.velocityRange = 120
+            cell.emissionLongitude = .pi
+            cell.emissionRange = .pi / 6
+            cell.spin = 4.0
+            cell.spinRange = 2.5
+            cell.scale = 0.8
+            cell.scaleRange = 0.4
+            cell.contents = emojiImage(emoji, size: 28)?.cgImage
+            return cell
+        }
         
-        emitter.emitterCells = [cell]
+        emitter.emitterCells = emojis.map(cell(for:))
         view.layer.addSublayer(emitter)
         
-        // Nach kurzer Zeit keine neuen Partikel mehr erzeugen (fallen aber weiter)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+        // Geburt kurzzeitig, dann stoppen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
             emitter.birthRate = 0
         }
         return view

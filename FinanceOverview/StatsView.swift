@@ -21,12 +21,10 @@ struct StatsView: View {
     
     // MARK: - Derived series (robust gegen leere Zeiträume)
     private var monthAxis: [Date] {
-        // Erzeuge konsistente Monatsachse (aufwärts sortiert)
         let cal = Calendar.current
-        let end = cal.date(from: cal.dateComponents([.year, .month], from: Date()))! // Start des aktuellen Monats
+        let end = cal.date(from: cal.dateComponents([.year, .month], from: Date()))!
         let count: Int = {
             if let m = range.months { return max(m, 1) }
-            // "Alle": nutze Spannweite der Daten, mindestens 6 Monate
             let months = spanInMonths()
             return max(months, 6)
         }()
@@ -36,7 +34,7 @@ struct StatsView: View {
         sumByMonth(kind: .income)
     }
     private var expenseByMonth: [Date: Double] {
-        sumByMonth(kind: .expense) // bereits positiv summiert
+        sumByMonth(kind: .expense)
     }
     private var incomeSeries: [MonthlyPoint] {
         monthAxis.map { MonthlyPoint(month: $0, value: incomeByMonth[$0] ?? 0) }
@@ -71,19 +69,19 @@ struct StatsView: View {
         return Array(sums.sorted { $0.value > $1.value }.prefix(6))
     }
     
-    // Ausgaben nach Kontokategorie
-    private var expenseByAccountCategory: [(AccountCategory, Double)] {
+    // Top Kategorien (Ausgaben)
+    private var topExpenseCategories: [TopCategory] {
         let txs = filteredTransactions().filter { $0.kind == .expense }
-        var dict: [AccountCategory: Double] = [:]
-        for t in txs {
-            if let id = t.accountID,
-               let cat = store.accounts.first(where: { $0.id == id })?.category {
-                dict[cat, default: 0] += -t.amount
-            }
+        let grouped = Dictionary(grouping: txs, by: { $0.categoryID })
+        var result: [TopCategory] = []
+        for (catID, items) in grouped {
+            let total = items.map { -$0.amount }.reduce(0, +)
+            let cat = store.category(by: catID)
+            let name = cat?.name ?? "Ohne Kategorie"
+            let color = cat?.swiftUIColor ?? .gray
+            result.append(TopCategory(id: catID ?? UUID(), name: name, value: total, color: color))
         }
-        return AccountCategory.allCases
-            .map { ($0, dict[$0] ?? 0) }
-            .filter { $0.1 > 0 }
+        return result.sorted { $0.value > $1.value }.prefix(6).map { $0 }
     }
     
     var body: some View {
@@ -228,21 +226,19 @@ struct StatsView: View {
                         }
                     }
                     
-                    // Ausgaben nach Kontokategorie
-                    cardContainer(title: "Ausgaben nach Kontokategorie") {
-                        if expenseByAccountCategory.isEmpty {
+                    // Top Kategorien
+                    cardContainer(title: "Top Kategorien (Ausgaben)") {
+                        if topExpenseCategories.isEmpty {
                             placeholder("Keine Ausgaben im Zeitraum")
                         } else {
-                            Chart {
-                                ForEach(expenseByAccountCategory, id: \.0) { (cat, value) in
-                                    BarMark(
-                                        x: .value("Betrag", value),
-                                        y: .value("Kategorie", cat.rawValue)
-                                    )
-                                    .foregroundStyle(Color.accentColor.gradient)
-                                }
+                            Chart(topExpenseCategories) { item in
+                                BarMark(
+                                    x: .value("Betrag", item.value),
+                                    y: .value("Kategorie", item.name)
+                                )
+                                .foregroundStyle(item.color)
                             }
-                            .frame(height: CGFloat(max(200, expenseByAccountCategory.count * 32)))
+                            .frame(height: CGFloat(max(220, topExpenseCategories.count * 36)))
                             .chartXAxis {
                                 AxisMarks { value in
                                     AxisGridLine()
@@ -284,7 +280,7 @@ struct StatsView: View {
             case .income:
                 dict[monthStart, default: 0] += t.amount
             case .expense:
-                dict[monthStart, default: 0] += -t.amount // positiv summieren
+                dict[monthStart, default: 0] += -t.amount
             case .transfer:
                 break
             }
@@ -347,14 +343,6 @@ struct StatsView: View {
                     .fill(Color(uiColor: .tertiarySystemBackground))
             )
     }
-    
-    private func percentString(_ value: Double) -> String {
-        let pct = max(min(value, 1), -1)
-        let nf = NumberFormatter()
-        nf.numberStyle = .percent
-        nf.maximumFractionDigits = 0
-        return nf.string(from: NSNumber(value: pct)) ?? "0%"
-    }
 }
 
 struct MonthlyPoint: Identifiable, Hashable {
@@ -368,3 +356,11 @@ struct TopPlace: Identifiable, Hashable {
     let name: String
     let value: Double
 }
+
+struct TopCategory: Identifiable, Hashable {
+    let id: UUID
+    let name: String
+    let value: Double
+    let color: Color
+}
+
